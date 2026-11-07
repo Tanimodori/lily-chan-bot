@@ -45,12 +45,13 @@ failure）：
 3. 读 issue 并做形态校验：PR、已关闭、标签组不符都在此拦下。
 4. 评论路径额外校验：评论归属、作者协会、是否提及该仓库的 bot、是否 bot 自身。
 5. 幂等与配额：解析 bot 评论中的隐藏标记，按 issue / 仓库 / 全局三级计数。
-6. 构建快照：issue 元数据、正文、非 bot 评论、附件 URL、`code_repo`、`code_ref`，并对
-   规范化 JSON 取 SHA-256。快照哈希会写入最终评论的隐藏标记，用于事后判断结论基于
-   哪份输入。
-7. 解析代码 ref：从表单的模组版本字段推导，去前导 `v` 后套 `tag_template`（默认
-   `v{version}`）；远端 tag 可用时取首个命中的候选，全部未命中回退 `fallback_ref`；
-   远端不可用时直接取首个候选，该 ref 未经校验。
+6. 构建快照：issue 元数据、正文、非 bot 评论、附件 URL、`code_repo`、`code_ref`、
+   `code_refs`、`reported_version`、`version_tag` 与 `golden`，并对规范化 JSON 取
+   SHA-256。快照哈希会写入最终评论的隐藏标记，用于事后判断结论基于哪份输入。
+7. 解析代码 ref：主 ref 固定为 `fallback_ref`（当前 `master`），用于诊断当前实现。再从
+   表单的模组版本字段推导历史 tag（去前导 `v` 后套 `tag_template`，默认 `v{version}`）；
+   远端 tag 存在时把命中的 tag 追加到 `code_refs`，否则只保留主 ref。`snapshot` 记录
+   `reported_version` 与 `version_tag`；`version_tag` 为空表示没有版本号或 tag 无效。
 8. 写候选 endpoint 列表：按健康状态过滤，未必都带 key。
 
 顺序有约束：可见性与形态校验必须先于快照，否则不该公开的内容会进入 artifact；配额必须
@@ -61,7 +62,7 @@ failure）：
 | 产物 | 内容 | 消费者 | 保留 |
 |---|---|---|---|
 | `inputs/verdict.json` | `decision`、`reason`；`proceed` 时另含快照哈希、代码来源与 ref | `finalize`、人工复核 | artifact 30 天 |
-| `inputs/snapshot.json` | issue 元数据、正文、非 bot 评论、附件 URL、`sha256` | `analysis`、`finalize` | artifact 30 天 |
+| `inputs/snapshot.json` | issue 元数据、正文、非 bot 评论、附件 URL、`code_refs`、`version_tag`、`sha256` | `analysis`、`finalize` | artifact 30 天 |
 | `inputs/issue.md` | 标题与正文的可读副本 | 人工复核 | artifact 30 天 |
 | `inputs/model.json` | 候选 endpoint 与池名 | supervisor | artifact 30 天 |
 | `inputs/model_health.json` | `MODEL_HEALTH` 快照 | supervisor | artifact 30 天 |
@@ -80,9 +81,9 @@ failure）：
 ### 权限边界
 
 - **文件访问**：检出会把本仓库写到工作区；可写 `inputs/`（下载 gate artifact、写入 `logs/`
-  附件）、`code/`（worktree，含 `code/current` 与 `code/golden`）、`.cache/`（两个 mirror
-  缓存）、`.codex/`（CLI 配置）、`outputs/`（全部产物）。`code/` 对 agent 只读是提示词约定，
-  不是文件系统强制。
+  附件与 `code_manifest.json`）、`code/`（worktree，含 `code/current`、`code/golden` 与
+  可能存在的 `code/<tag>`）、`.cache/`（两个 mirror 缓存）、`.codex/`（CLI 配置）、
+  `outputs/`（全部产物）。`code/` 对 agent 只读是提示词约定，不是文件系统强制。
 - **容器权限**：平台提供托管 runner；本仓库设定 `approval_policy = never`、
   `sandbox_mode = danger-full-access`、`web_search = disabled`，job 超时 75 分钟，
   supervisor 墙钟预算 60 分钟（从相关性分类之前开始计算）。没有人工审批，也没有沙箱
@@ -99,21 +100,25 @@ failure）：
 ### 执行流程
 
 1. 下载 `gate-<run_id>` artifact 到 `inputs/`。缺快照即失败，不重新读取 issue。
-2. 还原 mirror 缓存，`fetch` 后按 ref 建 worktree，`code/current` 指向主 ref。恢复缓存前
-   先清理 worktree 注册，否则路径变化后 fetch 会被拒绝。某个 ref 无效时 worktree 回退
-   `master`，此时 `code_ref` 与实际检出不一致。`code/golden` 是另一个仓库：上游原版 GT6
-   的固定提交，单独一份 mirror 缓存，解析不到就跳过，不影响主流程。
-3. 安装固定版本的 Codex CLI，并装好 `pyyaml` 与 `pillow`：agent 会写脚本自检答案，缺少
+2. 还原 mirror 缓存，`fetch` 后按 ref 建 worktree；`code/current` 指向主 ref（`master`），
+   历史版本 tag 建成 `code/<tag>`，只用于对照。恢复缓存前先清理 worktree 注册，否则路径
+   变化后 fetch 会被拒绝。主 ref 无效时回退 `master`；历史 ref 建不出来时跳过，manifest
+   与 prompt 不会把它当作历史版本。`code/golden` 是另一个仓库：上游原版 GT6 的固定提交，单独一份
+   mirror 缓存，解析不到就跳过，不影响主流程。
+3. 生成 `inputs/code_manifest.json`：列出 `gt6ce`（master）、`golden`、`history`（历史
+   tag）、`extra`（额外 ref）与 `auxiliary`（仓库配置的辅助材料）的文件路径，供 agent
+   按清单读取，避免遍历整个 `code/`。
+4. 安装固定版本的 Codex CLI，并装好 `pyyaml` 与 `pillow`：agent 会写脚本自检答案，缺少
    这些包会让它反复尝试而不是给出结论。版本固定，避免同一 issue 在不同时间得出不同结果。
-4. 预取附件。下载与解压由脚本完成，不交给 agent：单文件与总量有上限，zip 内全部非目录
+5. 预取附件。下载与解压由脚本完成，不交给 agent：单文件与总量有上限，zip 内全部非目录
    条目落盘，但跳过绝对路径与含 `..` 的条目；落盘后按文本后缀筛出可疑行并脱敏，写入
    `log_digest.md`。
-5. preflight 轮。用候选序逐个做一次 `temperature: 0` 的 JSON 调用，既分类也判定入口：
+6. preflight 轮。用候选序逐个做一次 `temperature: 0` 的 JSON 调用，既分类也判定入口：
    输出 `spam`/`out_of_scope`/`in_scope`，只有前两类且达到 `reject.min_confidence` 才拒绝。
    传输失败（超时、4xx、5xx）按探测规则计罚并换下一个候选；有响应但分类不可解析，说明
    入口可用、只是没给出结论，按 `in_scope` 继续。全部候选都失败时以「无入口通过 preflight」
    结束，不做无模型的降级。判定发生在任何 agent 代码执行之前，因此这条路径没有工具。
-6. 运行 agent。prompt 由 `prompts/common/` 与 `prompts/repos/<profile>/` 组合，组合结果
+7. 运行 agent。prompt 由 `prompts/common/` 与 `prompts/repos/<profile>/` 组合，组合结果
    写入 `prompt.txt` 以便复核。只提供 `chat/completions` 的入口会先由 supervisor 启动本地
    协议桥（`scripts/responses_bridge.py`），Codex 仍按 `wire_api="responses"` 连接
    `127.0.0.1`；桥的日志写入 `bridge.log`。agent 按四个节点增量写 `answer.md`，最后写
@@ -123,7 +128,7 @@ failure）：
    `rate_limit_retries` 退避重试；只有确定性错误（`auth`/`config`，例如该 CLI 版本不支持
    某个 provider 配置）才继续沿候选序换人。`l2.stall_seconds`（当前 180 秒）内没有任何
    输出即终止本次尝试：它只防挂死吃掉 job 预算，不参与入口判定，也不计罚。
-7. 扫描输出。递归遍历 `outputs/`（含按 attempt 归档的副本）并**就地脱敏**：每个文件整体
+8. 扫描输出。递归遍历 `outputs/`（含按 attempt 归档的副本）并**就地脱敏**：每个文件整体
    读入后匹配，私钥块整块替换（缺 `END` 的半截块一直吞到文末），其余命中片段替换为
    `[REDACTED]`。超过扫描上限的文件只保留可扫描的前段，其余连同被切断的半行一起丢弃并
    标注，未扫描的内容不进入 artifact。命中同时记入 `secret_scan`，供 `finalize` 阻断发布。

@@ -184,17 +184,40 @@ def prompt_text(kind: str) -> str:
     return base
 
 
+def snapshot_data() -> dict:
+    path = c.ROOT / "inputs/snapshot.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
 def build_prompt() -> str:
     if RERUN_PROMPT:
         return RERUN_PROMPT
     skill = prompt_text("analyze")
     nodes = prompt_text("nodes")
+    snapshot = snapshot_data()
+    version_tag = str(snapshot.get("version_tag") or "")
+    history_dir = version_tag.replace("/", "_").replace(" ", "_")
+    if version_tag and (c.ROOT / "code" / history_dir).exists():
+        history = (
+            f"历史版本：code/{history_dir}（{version_tag}），"
+            "只用于确认问题是否存在或是否已修复。"
+        )
+    else:
+        history = "历史版本：无（未提供版本号、tag 无效或 worktree 不可用），跳过历史对照。"
     return (
         f"{skill}\n\n{nodes}\n\n"
         f"目标 issue：{REPO}#{ISSUE}\n"
         "工作目录：inputs/、code/、outputs/。只读 inputs/ 与 code/，只写 outputs/。\n"
-        "code/current 指向报告里的版本；若存在 code/golden，它是上游原版 GT6 的固定提交，"
-        "即参照实现基准，用于判断某个行为是移植偏差还是上游本就如此。\n"
+        "code/current 是当前主分支（master），诊断与修复建议以它为准；"
+        "code/golden 是上游原版 GT6 的固定提交，是参照实现。\n"
+        f"{history}\n"
+        "inputs/code_manifest.json 列出 gt6ce、golden、history、extra 与 auxiliary 的文件路径；"
+        "先读清单，再按路径读取具体文件。\n"
     )
 
 

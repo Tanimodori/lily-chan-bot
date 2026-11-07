@@ -139,9 +139,14 @@ jobs:
           primary=""
           for ref in $CODE_REFS; do
             slug=$(printf '%s' "$ref" | tr '/ ' '__')
-            git -C .cache/gt6.git worktree add -f "$worktree_root/$slug" "$ref" || \
-              git -C .cache/gt6.git worktree add -f "$worktree_root/$slug" master
-            if [ -z "$primary" ]; then primary="$slug"; fi
+            if [ -z "$primary" ]; then
+              git -C .cache/gt6.git worktree add -f "$worktree_root/$slug" "$ref" || \
+                git -C .cache/gt6.git worktree add -f "$worktree_root/$slug" master
+              primary="$slug"
+            else
+              git -C .cache/gt6.git worktree add -f "$worktree_root/$slug" "$ref" || \
+                echo "ref $ref unavailable; skipping"
+            fi
           done
           ln -sfn "$primary" code/current
           # golden 是上游原版 GT6 的固定提交：6CE 的行号引用与行为对齐都以它为基准，
@@ -162,6 +167,10 @@ jobs:
               echo "golden commit $GOLDEN_COMMIT not reachable; skipping"
             fi
           fi
+      - name: Build code manifest
+        env:
+          REPO: ${{ inputs.repo }}
+        run: python scripts/manifest.py
       - name: Save GT6 mirror
         if: always()
         continue-on-error: true

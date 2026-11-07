@@ -5,9 +5,10 @@
 
 ## 输入
 
-- `inputs/snapshot.json`：issue 正文、评论、附件 URL、版本字段与快照哈希。
+- `inputs/snapshot.json`：issue 正文、评论、附件 URL、版本字段、`version_tag` 与快照哈希。
+- `inputs/code_manifest.json`：`gt6ce`、`golden`、`history`、`extra` 与 `auxiliary` 的文件路径列表。
 - `inputs/logs/`：由确定性脚本下载并解压的日志与崩溃报告；可能不存在。
-- `code/current/`：按 issue 报告的版本检出的源码；`code/<ref>/` 是其他版本。
+- `code/current/`：当前主分支（`master`）源码；`code/<tag>/`：历史版本；`code/golden/`：原版 GT6 参照。
 - `outputs/`：唯一可写目录。
 
 ## 绝对规则
@@ -26,8 +27,11 @@
    复现步骤、附件清单。
 2. 若 `inputs/logs/` 存在，优先查看崩溃报告、`latest.log`/`debug.log`、JVM
    `hs_err_pid*` 与日志头部的版本/模组信息。
-3. 在 `code/current/` 中验证堆栈帧与代码路径。具体目录布局、版本映射和文件约定由
-   仓库 overlay 提供；只引用真实存在的文件与行号，格式 `path:line`。
+3. 先在 `code/current/`（master）中验证堆栈帧、代码路径与问题是否仍然存在；如果
+   `inputs/snapshot.json` 的 `version_tag` 非空，再到 `code/<version_tag>/` 快速确认
+   历史版本是否存在该问题。修复建议针对 `code/current/`，不要针对历史版本。具体目录
+   布局、版本映射和文件约定由仓库 overlay 提供；只引用真实存在的文件与行号，格式
+   `path:line`。
 4. 按仓库 overlay 的分类轴判断 `issue_type` 与 `labels`：类型只写在 `issue_type`，
    性质、领域、分流状态、优先级与版本写在 `labels`；类型标签不要重复放进 `labels`。
 5. 如果 issue 是 `bug` 或带 `crash` 但完全没有日志，明确写“缺少日志，无法定位”，不要
@@ -91,6 +95,7 @@
   `labels`。
 - `labels` 只能来自仓库 overlay 或仓库配置给出的集合；不要创建新标签。性质与类型必须
   兼容，性质最多 2 个、领域最多 2 个，分流状态、优先级与版本各最多 1 个。
+- `affected_versions` 记录 issue 实际报告的版本；诊断基于 master，不因此改写版本字段。
 - 结论用中文；代码标识符与日志原文保持原样，并按上面的 Markdown 规则使用行内 code。
 - 证据最多 40 条，每条都要能被维护者复核。
 - `issue_summary` 用 3–6 条事实；`user_advice` 用 2–4 条用户可执行动作。

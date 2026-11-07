@@ -3,8 +3,10 @@
 ## 项目
 
 - 项目：GregTech6CE/GregTech6（GT6CE），Minecraft 1.20.1 Forge 与 1.21.1 NeoForge。
-- 代码来源按 issue 的 mod 版本对应 tag（`v{version}`）；找不到时回退 `master`。
-- `code/current/` 是主版本，`code/<ref>/` 是额外版本。
+- `code/current/` 始终是 `master`，是诊断与修复建议的目标。
+- 如果 issue 提供了有效版本 tag 且 `code/<tag>/` 存在，它是对应历史版本，只用于判断
+  问题是否存在或是否已修复；没有版本号、tag 无效或 worktree 不可用时不存在历史版本。
+- `code/golden/` 是上游原版 GT6 的固定提交，作为参照实现。
 
 ## 代码布局
 
@@ -14,6 +16,30 @@
 - 翻译：`core/src/main/resources/assets/gt6ce/lang/{en_us,zh_cn}.json` 与
   `TranslationKeys.java`。
 - 只引用真实存在的文件与行号，格式 `path:line`。
+
+## 参照与权威
+
+判断行为是否正确、尤其是 `parity` 时，按以下顺序取权威：
+
+1. `code/current/docs/decisions/parity/` 中已记录的声明；
+2. `code/golden/`（原版 GT6 固定提交）；
+3. `code/current/minecraft/versions/1.21.1-neoforge/`（NeoForge 实现）；
+4. `code/current/minecraft/versions/1.20.1-forge/`（Forge 实现）。
+
+parity 文档是对原版行为的显式裁决，优先于代码对照；两平台实现不一致时，以 NeoForge
+为准，Forge 作为兼容参考。若 issue 本身是平台特定问题，以该平台实现为证据，但“正确
+行为”的判定仍按上述顺序。
+
+## 版本与诊断顺序
+
+- 先读 `inputs/code_manifest.json`，按清单定位文件，不要遍历整个 `code/`。
+- 先在 `code/current/`（master）确认问题是否仍然存在、是否已有修复；诊断与
+  `fix_plan` / `ai_fix_hint` 都针对 master。
+- 如果 `inputs/snapshot.json` 的 `version_tag` 非空且 `code/<version_tag>/` 存在，再到
+  该目录快速确认问题在历史版本是否存在，以及 master 是否已经修复；历史版本只用于对照，
+  不作为修改目标。
+- `version_tag` 为空表示没有提供版本号或版本号无效；此时跳过历史对照，只分析 master。
+- `affected_versions` 仍记录 issue 实际报告的版本，不因为诊断基于 master 而改写。
 
 ## 日志
 

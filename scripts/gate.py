@@ -14,6 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import common as c  # noqa: E402
 import model_pool  # noqa: E402
+import refs  # noqa: E402
 
 INPUTS = c.ROOT / "inputs"
 INPUTS.mkdir(exist_ok=True)
@@ -82,29 +83,6 @@ def remote_tags(repo: str) -> set[str] | None:
         return tags
     except Exception:
         return None
-
-
-def resolve_ref() -> str:
-    body = issue.get("body") or ""
-    version = c.form_field(body, "模组版本 / Mod version", "模组版本", "Mod version").strip()
-    base = version[1:] if version[:1].lower() == "v" else version
-    template = repo_cfg.get("tag_template", "v{version}")
-    candidates: list[str] = []
-    if base and repo_cfg.get("code_ref_mode", "tag") == "tag":
-        formatted = template.replace("{version}", base)
-        if formatted:
-            candidates.append(formatted)
-        if base not in candidates:
-            candidates.append(base)
-    fallback = repo_cfg.get("fallback_ref", "master")
-    candidates.append(fallback)
-    tags = remote_tags(repo_cfg["code_repo"])
-    if tags:
-        for candidate in candidates:
-            if candidate in tags:
-                return candidate
-        return fallback
-    return candidates[0] if candidates else fallback
 
 
 def main() -> None:
@@ -237,6 +215,17 @@ def main() -> None:
     body = issue.get("body") or ""
     texts = "\n".join([body] + [(item.get("body") or "") for item in comments])
     attachments = c.attachments(texts)
+    base = refs.version_base(body)
+    version_tag = refs.resolve_version_tag(base, remote_tags(repo_cfg["code_repo"]), repo_cfg)
+    primary = repo_cfg.get("fallback_ref", "master")
+    ref_list = [primary]
+    if version_tag and version_tag not in ref_list:
+        ref_list.append(version_tag)
+    for extra in repo_cfg.get("extra_code_refs", []) or []:
+        extra = str(extra).strip()
+        if extra and extra not in ref_list:
+            ref_list.append(extra)
+    golden = repo_cfg.get("golden") or {}
     snapshot = {
         "repo": REPO,
         "issue": {
@@ -262,7 +251,14 @@ def main() -> None:
         ],
         "attachments": attachments,
         "code_repo": repo_cfg["code_repo"],
-        "code_ref": resolve_ref(),
+        "code_ref": primary,
+        "code_refs": ref_list,
+        "reported_version": base,
+        "version_tag": version_tag,
+        "golden": {
+            "repo": str(golden.get("repo") or ""),
+            "commit": str(golden.get("commit") or ""),
+        },
         "captured_at": now.isoformat(),
     }
     canonical = json.dumps(snapshot, ensure_ascii=False, sort_keys=True)
@@ -281,15 +277,9 @@ def main() -> None:
         },
     )
 
-    refs = [snapshot["code_ref"]]
-    for extra in repo_cfg.get("extra_code_refs", []) or []:
-        extra = str(extra).strip()
-        if extra and extra not in refs:
-            refs.append(extra)
-    code_refs = " ".join(refs)
+    code_refs = " ".join(ref_list)
     run_cache_prefix = cache_prefix(repo_cfg["code_repo"])
 
-    golden = repo_cfg.get("golden") or {}
     finish(
         "proceed",
         "accepted",

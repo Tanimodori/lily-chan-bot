@@ -20,6 +20,7 @@
       "model_pool": "shared",
       "prompt_profile": "example",
       "extra_code_refs": [],
+      "auxiliary_materials": [],
       "triage": {
         "process_only": [
           [

@@ -26,6 +26,7 @@
       "model_pool": "shared",
       "prompt_profile": "gregtech6",
       "extra_code_refs": [],
+      "auxiliary_materials": [],
       "triage": {
         "process_only": [
           [
